@@ -1,27 +1,41 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, Float
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, String, DateTime, JSON, ForeignKey, Integer
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from geoalchemy2 import Geometry
-from app.database import Base
 from datetime import datetime
+import uuid
+from app.db import Base
 
 
-class GISData(Base):
-    __tablename__ = "gis_data"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False, index=True)
-    description = Column(Text, nullable=True)
-    file_type = Column(String(50), nullable=False)  # geojson, shapefile, kml, etc.
-    file_path = Column(String(500), nullable=False)  # S3 path or local path
-    file_name = Column(String(255), nullable=False)
-    geometry = Column(Geometry(geometry_type='GEOMETRY', srid=4326), nullable=True)
-    properties = Column(JSONB, nullable=True)  # Store feature properties
-    bbox = Column(JSONB, nullable=True)  # Bounding box [minx, miny, maxx, maxy]
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+class GeoFile(Base):
+    __tablename__ = "geo_files"
     
-    # Metadata
-    srid = Column(Integer, default=4326)  # Spatial Reference System Identifier
-    feature_count = Column(Integer, default=0)
-    file_size = Column(Float, nullable=True)  # File size in bytes
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    filename = Column(String, nullable=False, index=True)
+    original_filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)  # geojson, kml, shp, etc.
+    state = Column(String, nullable=True, index=True)
+    district = Column(String, nullable=True, index=True)
+    total_features = Column(Integer, default=0)
+    file_size = Column(Integer)  # Size in bytes
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Relationship to features
+    features = relationship("Feature", back_populates="file", cascade="all, delete-orphan")
+
+
+class Feature(Base):
+    __tablename__ = "features"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    file_id = Column(UUID(as_uuid=True), ForeignKey("geo_files.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    properties = Column(JSON, nullable=True)
+    geometry = Column(Geometry(geometry_type='GEOMETRY', srid=4326), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Relationship to file
+    file = relationship("GeoFile", back_populates="features")
 

@@ -1,42 +1,45 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import engine, Base
-from app.routers import gis_data, files, spatial_queries
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+from app.db import init_db
+from app.routers import features, files
 
 app = FastAPI(
-    title="GIS Database Service",
-    description="A service for managing GIS data with support for GeoJSON, Shapefiles, and spatial queries",
+    title="GIS Data API",
+    description="API for storing and managing geographic data files",
     version="1.0.0"
 )
 
-# CORS middleware
+# CORS middleware - must be added before routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Include routers
-app.include_router(gis_data.router, prefix="/api/v1/gis-data", tags=["GIS Data"])
-app.include_router(files.router, prefix="/api/v1/files", tags=["Files"])
-app.include_router(spatial_queries.router, prefix="/api/v1/spatial", tags=["Spatial Queries"])
+app.include_router(files.router)
+app.include_router(features.router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    init_db()
 
 
 @app.get("/")
 async def root():
     return {
-        "message": "GIS Database Service API",
-        "version": "1.0.0",
-        "docs": "/docs"
+        "message": "GIS Data API",
+        "docs": "/docs",
+        "version": "1.0.0"
     }
 
 
 @app.get("/health")
-async def health_check():
+async def health():
     return {"status": "healthy"}
 

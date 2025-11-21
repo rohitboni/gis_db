@@ -1,57 +1,106 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from geojson import Feature, FeatureCollection
+from uuid import UUID
+from geoalchemy2.shape import to_shape
 
 
-class GISDataBase(BaseModel):
-    name: str
-    description: Optional[str] = None
+class GeoFileBase(BaseModel):
+    filename: str
+    original_filename: str
     file_type: str
-    file_name: str
-    properties: Optional[Dict[str, Any]] = None
-    bbox: Optional[List[float]] = None
-    srid: int = 4326
-    feature_count: int = 0
-    file_size: Optional[float] = None
 
 
-class GISDataCreate(GISDataBase):
-    geometry: Optional[str] = None  # WKT or GeoJSON string
-    file_path: str
+class GeoFileCreate(GeoFileBase):
+    state: Optional[str] = None
+    district: Optional[str] = None
+    file_size: Optional[int] = None
 
 
-class GISDataUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    properties: Optional[Dict[str, Any]] = None
+class GeoFileUpdate(BaseModel):
+    filename: Optional[str] = None
+    state: Optional[str] = None
+    district: Optional[str] = None
 
 
-class GISDataResponse(GISDataBase):
-    id: int
-    file_path: str
-    geometry: Optional[Dict[str, Any]] = None  # GeoJSON geometry
+class GeoFileResponse(GeoFileBase):
+    id: UUID
+    state: Optional[str] = None
+    district: Optional[str] = None
+    total_features: int
+    file_size: Optional[int] = None
     created_at: datetime
     updated_at: datetime
-
+    
     class Config:
         from_attributes = True
 
 
-class FileUploadResponse(BaseModel):
-    message: str
-    file_id: int
-    file_name: str
-    file_path: str
+class GeoFileSummary(GeoFileResponse):
+    """File summary with feature count"""
+    pass
 
 
-class SpatialQueryRequest(BaseModel):
-    geometry: Dict[str, Any]  # GeoJSON geometry
-    operation: str = Field(..., description="intersects, contains, within, distance")
-    distance: Optional[float] = None  # For distance queries (in meters)
+class FeatureBase(BaseModel):
+    name: str
+    properties: Optional[Dict[str, Any]] = None
 
 
-class SpatialQueryResponse(BaseModel):
-    results: List[GISDataResponse]
-    count: int
+class FeatureCreate(FeatureBase):
+    geometry: Dict[str, Any] = Field(..., description="Geometry in GeoJSON format")
+
+
+class FeatureUpdate(BaseModel):
+    name: Optional[str] = None
+    properties: Optional[Dict[str, Any]] = None
+    geometry: Optional[Dict[str, Any]] = Field(None, description="Geometry in GeoJSON format")
+
+
+class FeatureResponse(FeatureBase):
+    id: UUID
+    file_id: UUID
+    geometry: Dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+def geometry_to_geojson(geometry):
+    """Convert GeoAlchemy2 geometry to GeoJSON dict
+    
+    If the geometry coordinates are out of WGS84 bounds (lat: -90 to 90, lon: -180 to 180),
+    it might be in a projected coordinate system. For display purposes, we'll still return
+    the coordinates, but the frontend should handle invalid coordinate ranges.
+    """
+    if geometry is None:
+        return None
+    try:
+        from geoalchemy2.shape import to_shape
+        from shapely.geometry import mapping
+        shape_obj = to_shape(geometry)
+        geojson = mapping(shape_obj)
+        
+        # Log a warning if coordinates seem invalid for WGS84
+        bounds = shape_obj.bounds
+        if bounds:
+            minx, miny, maxx, maxy = bounds
+            if not (-180 <= minx <= 180 and -180 <= maxx <= 180 and
+                    -90 <= miny <= 90 and -90 <= maxy <= 90):
+                import warnings
+                warnings.warn(
+                    f"Geometry coordinates are out of WGS84 range. "
+                    f"Bounds: ({minx:.6f}, {miny:.6f}, {maxx:.6f}, {maxy:.6f}). "
+                    f"This geometry may have been stored with incorrect coordinate system. "
+                    f"Expected: longitude -180 to 180, latitude -90 to 90."
+                )
+        
+        return geojson
+    except Exception as e:
+        # Fallback if conversion fails
+        import traceback
+        print(f"Error converting geometry to GeoJSON: {e}")
+        print(traceback.format_exc())
+        return None
 

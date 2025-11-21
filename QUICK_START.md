@@ -1,169 +1,117 @@
 # Quick Start Guide
 
-## For Your EC2 Instance (43.204.148.243)
+## Local Development Setup (5 minutes)
 
-### Step 1: Upload Project to EC2
+### 1. Install PostgreSQL with PostGIS
 
-From your local machine:
-
+**macOS (Homebrew):**
 ```bash
-# Navigate to project directory
-cd /Users/rohitboni/Downloads/All_files/project/1acre/geomapping_full/gis_db
-
-# Upload to EC2
-scp -i "oneacre-prod.pem" -r . ubuntu@43.204.148.243:/home/ubuntu/gis_db
+brew install postgresql postgis
+brew services start postgresql
 ```
 
-### Step 2: SSH into EC2
-
+**Ubuntu/Debian:**
 ```bash
-ssh -i "oneacre-prod.pem" ubuntu@43.204.148.243
-```
-
-### Step 3: Set Up AWS Infrastructure
-
-```bash
-cd /home/ubuntu/gis_db/aws-setup
-
-# Set your database password
-export DB_PASSWORD="YourSecurePassword123!"
-
-# Make scripts executable
-chmod +x setup-s3.sh setup-rds.sh
-
-# Create S3 bucket
-./setup-s3.sh
-
-# Create RDS instance (takes 10-15 minutes)
-./setup-rds.sh
-```
-
-**Note the output:**
-- S3 Bucket Name
-- RDS Endpoint
-
-### Step 4: Configure Environment
-
-```bash
-cd /home/ubuntu/gis_db
-cp .env.example .env
-nano .env
-```
-
-Update these values:
-```env
-DATABASE_URL=postgresql://postgres:YourSecurePassword123!@YOUR_RDS_ENDPOINT:5432/gis_db
-RDS_ENDPOINT=your-rds-endpoint.region.rds.amazonaws.com
-RDS_PASSWORD=YourSecurePassword123!
-S3_BUCKET_NAME=your-bucket-name-from-step-3
-AWS_REGION=us-east-1
-```
-
-If using IAM user (not IAM role):
-```env
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-```
-
-### Step 5: Enable PostGIS on RDS
-
-```bash
-# Install PostgreSQL client (if not installed)
 sudo apt-get update
-sudo apt-get install -y postgresql-client
+sudo apt-get install postgresql postgis
+sudo systemctl start postgresql
+```
 
-# Connect to RDS (replace with your endpoint)
-psql -h YOUR_RDS_ENDPOINT -U postgres -d postgres
+### 2. Create Database
 
-# In psql, run:
+```bash
+psql -U postgres
+```
+
+In PostgreSQL shell:
+```sql
 CREATE DATABASE gis_db;
 \c gis_db
-CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE EXTENSION IF NOT EXISTS postgis_topology;
+CREATE EXTENSION postgis;
 \q
 ```
 
-### Step 6: Deploy Service
+### 3. Set Up Python Environment
 
 ```bash
-cd /home/ubuntu/gis_db
-chmod +x deploy.sh
-./deploy.sh
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-### Step 7: Verify
+### 4. Configure Environment
 
 ```bash
-# Check service status
-docker-compose ps
+# Copy example env file
+cp env.example .env
 
-# View logs
-docker-compose logs -f api
-
-# Test API
-curl http://localhost:8000/health
-
-# Access API docs
-# Open browser: http://43.204.148.243:8000/docs
+# Edit .env file with your database credentials
+# DATABASE_URL=postgresql://postgres:your_password@localhost:5432/gis_db
 ```
 
-## API Usage Examples
-
-### Upload GeoJSON
+### 5. Initialize Database
 
 ```bash
-curl -X POST "http://43.204.148.243:8000/api/v1/files/upload/geojson" \
-  -F "file=@data.geojson" \
-  -F "name=My GeoJSON" \
-  -F "description=Test data"
+python -c "from app.db import init_db; init_db()"
 ```
 
-### Get All Data
+### 6. Run Application
 
 ```bash
-curl "http://43.204.148.243:8000/api/v1/gis-data/"
+uvicorn app.main:app --reload
 ```
 
-### Spatial Query (Intersects)
+Open http://localhost:8000/docs in your browser to see the interactive API documentation!
+
+## Test the API
+
+### Upload a GeoJSON file
+
+Create `test.geojson`:
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "Test Point"},
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-122.4194, 37.7749]
+      }
+    }
+  ]
+}
+```
+
+Upload it:
+```bash
+curl -X POST "http://localhost:8000/features/upload" \
+  -F "file=@test.geojson"
+```
+
+### List all features
 
 ```bash
-curl -X POST "http://43.204.148.243:8000/api/v1/spatial/intersects" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "geometry": {
-      "type": "Polygon",
-      "coordinates": [[[-122.4, 37.8], [-122.3, 37.8], [-122.3, 37.9], [-122.4, 37.9], [-122.4, 37.8]]]
-    },
-    "operation": "intersects"
-  }'
+curl http://localhost:8000/features
 ```
 
 ## Troubleshooting
 
-### Can't connect to RDS
-- Check security group allows EC2 security group on port 5432
-- Verify RDS endpoint is correct
-- Check password is correct
+**Can't connect to database:**
+- Check PostgreSQL service is running: `sudo systemctl status postgresql`
+- Verify DATABASE_URL in .env file
+- Check database exists and PostGIS extension is enabled
 
-### S3 upload fails
-- Verify IAM permissions
-- Check AWS credentials in .env
-- Verify bucket name is correct
+**File upload fails:**
+- Check file format is supported
+- Ensure file is not corrupted
+- For shapefiles, upload as ZIP containing .shp, .shx, .dbf files
 
-### PostGIS errors
-- Make sure PostGIS extension is enabled: `CREATE EXTENSION postgis;`
-- Check RDS instance has PostGIS support (PostgreSQL 12+)
-
-### Service won't start
-- Check logs: `docker-compose logs api`
-- Verify .env file is configured correctly
-- Check port 8000 is not in use: `sudo lsof -i :8000`
-
-## Next Steps
-
-1. Set up nginx reverse proxy for HTTPS
-2. Configure domain name
-3. Set up monitoring
-4. Implement authentication
-5. Set up automated backups
+**Import errors:**
+- Ensure all dependencies are installed: `pip install -r requirements.txt`
+- Check Python version (3.9+ required)
 

@@ -1,4 +1,3 @@
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,47 +6,30 @@ __pycache__/
 env/
 venv/
 ENV/
-.venv
-
-# Environment variables
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 .env
-.env.local
-
-# IDE
-.vscode/
-.idea/
+.venv
+*.log
+*.db
+*.sqlite
+*.pem
+.DS_Store
 *.swp
 *.swo
 *~
 
-# Database
-*.db
-*.sqlite
-
-# Uploads
-uploads/
-*.geojson
-*.shp
-*.shx
-*.dbf
-*.prj
-*.kml
-
-# Logs
-*.log
-logs/
-
-# Docker
-.dockerignore
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Alembic
-alembic/versions/*.pyc
-
-# AWS
-*.pem
-aws-credentials.json
-
+/Bengaluru_Rural.geojson
