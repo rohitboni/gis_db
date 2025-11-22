@@ -206,7 +206,24 @@
         path: "{{ project_dir }}"
       register: project_exists
 
-    - name: Stop existing Docker containers (preserve volumes)
+    - name: Stop ALL containers using port 5432 (PostgreSQL)
+      shell: |
+        # Stop containers using port 5432
+        docker ps --filter "publish=5432" -q | xargs -r docker stop || true
+        # Also check for containers with port mapping like 127.0.0.1:5432:5432
+        docker ps --format '{{.ID}} {{.Ports}}' | grep -E ':(5432|0.0.0.0:5432|127.0.0.1:5432)' | awk '{print $1}' | xargs -r docker stop || true
+      ignore_errors: yes
+      become_user: ubuntu
+
+    - name: Stop ALL containers using ports 80 and 443
+      shell: |
+        # Stop containers using ports 80/443
+        docker ps --filter "publish=80" -q | xargs -r docker stop || true
+        docker ps --filter "publish=443" -q | xargs -r docker stop || true
+      ignore_errors: yes
+      become_user: ubuntu
+
+    - name: Stop existing Docker containers from project directory (preserve volumes)
       shell: docker-compose down --remove-orphans
       args:
         chdir: "{{ project_dir }}/deployment"
@@ -214,10 +231,20 @@
       ignore_errors: yes
       become_user: ubuntu
 
+    - name: Stop containers from other projects (geomapping, etc.)
+      shell: |
+        # Stop any containers that might be from previous deployments
+        docker ps --filter "name=geomapping" -q | xargs -r docker stop || true
+        docker ps --filter "name=deployment" -q | xargs -r docker stop || true
+        # Also try stopping by common container names
+        docker stop geomapping-db-1 geomapping-web-1 geomapping-nginx-1 2>/dev/null || true
+        docker stop deployment-db-1 deployment-web-1 deployment-nginx-1 2>/dev/null || true
+      ignore_errors: yes
+      become_user: ubuntu
+
     - name: Wait for containers to stop completely
       pause:
         seconds: 10
-      when: project_exists.stat.exists
 
     # SAFE cleanup - preserves data volumes
     - name: Clean up unused containers only
@@ -496,6 +523,34 @@
       shell: docker-compose build --no-cache
       args:
         chdir: "{{ project_dir }}/deployment"
+      become_user: ubuntu
+
+    - name: Force stop all containers using required ports before starting
+      shell: |
+        # Find and stop ALL containers using ports 5432, 80, or 443
+        echo "Checking for containers using ports 5432, 80, 443..."
+        
+        # Stop containers using port 5432
+        CONTAINERS_5432=$(docker ps --format '{{.ID}}' --filter "publish=5432" 2>/dev/null || true)
+        if [ -n "$CONTAINERS_5432" ]; then
+          echo "Stopping containers using port 5432: $CONTAINERS_5432"
+          echo "$CONTAINERS_5432" | xargs docker stop || true
+        fi
+        
+        # Also check by inspecting port mappings
+        for CID in $(docker ps -q); do
+          PORTS=$(docker inspect --format='{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}' $CID 2>/dev/null || echo "")
+          if echo "$PORTS" | grep -E '(5432|80|443)/' > /dev/null; then
+            echo "Stopping container $CID using ports: $PORTS"
+            docker stop $CID || true
+          fi
+        done
+        
+        # Wait for ports to be released
+        sleep 3
+        
+        echo "Port cleanup complete"
+      ignore_errors: yes
       become_user: ubuntu
 
     - name: Start Docker containers (including nginx)
