@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: gis_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  web:
+    build: 
+      context: ..
+      dockerfile: deployment/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/gis_db
+      - DEBUG=True
+    volumes:
+      - ..:/app
+      - /app/venv  # Exclude venv from volume mount
+    command: sh -c "sleep 10 && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --timeout-keep-alive 600"
+    depends_on:
+      - db
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_data:
+    driver: local
