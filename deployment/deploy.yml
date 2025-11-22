@@ -520,10 +520,19 @@
         - "{{ project_dir }}/logs"
 
     - name: Build Docker containers (no cache for fresh build)
-      shell: docker-compose build --no-cache
-      args:
-        chdir: "{{ project_dir }}/deployment"
+      shell: |
+        cd "{{ project_dir }}/deployment"
+        echo "Starting Docker build (this may take several minutes)..."
+        docker-compose build --no-cache 2>&1 | tee /tmp/docker-build.log || {
+          echo "Docker build failed"
+          cat /tmp/docker-build.log
+          exit 1
+        }
+        echo "Docker build completed successfully"
       become_user: ubuntu
+      timeout: 3600  # 1 hour timeout
+      async: 3600
+      poll: 10
 
     - name: Force stop all containers using required ports before starting
       shell: |

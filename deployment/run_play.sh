@@ -155,9 +155,10 @@ gis-db-server ansible_host=$SERVER_HOST
 [aws_servers:vars]
 ansible_user=$ANSIBLE_USER
 ansible_ssh_private_key_file=$SSH_KEY_ABS
-ansible_ssh_common_args='-o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=60'
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o ControlMaster=auto -o ControlPersist=30m -o ControlPath=/tmp/ansible-ssh-%%h-%%p-%%r'
 ansible_python_interpreter=/usr/bin/python3
-ansible_timeout=120
+ansible_timeout=3600
+timeout=3600
 EOF
 
 echo "✅ Inventory file created with enhanced timeouts"
@@ -191,7 +192,8 @@ echo ""
 
 # Run with more verbose output and better error handling
 # Use -v for normal verbosity (change to -vv or -vvv for more debugging)
-ansible-playbook -i "$INVENTORY_FILE" deploy.yml -v --timeout=120
+# Increased timeout for long operations like Docker builds
+ansible-playbook -i "$INVENTORY_FILE" deploy.yml -v --timeout=3600 --ssh-common-args='-o ServerAliveInterval=30 -o ServerAliveCountMax=10'
 
 # Check deployment result
 ANSIBLE_EXIT_CODE=$?
