@@ -260,6 +260,96 @@ The API automatically handles different field name formats in the properties JSO
    curl "http://localhost:8000/features?village=Devarahosahalli"
    ```
 
+## File Download with Format Conversion
+
+### Download Single File with Format Conversion
+
+**GET** `/files/{file_id}/download`
+
+Download a single file in any supported format, regardless of the original upload format. All data is preserved during conversion - no data loss.
+
+**Query Parameters:**
+- `format` (string, default: "geojson") - Output format: `geojson`, `shapefile`, `kml`, `kmz`, `gpx`, `csv`
+
+**Supported Output Formats:**
+- `geojson` - GeoJSON format (default)
+- `shapefile` - ESRI Shapefile (returns ZIP with .shp, .shx, .dbf, .prj)
+- `kml` - Keyhole Markup Language
+- `kmz` - Compressed KML (ZIP)
+- `gpx` - GPS Exchange Format
+- `csv` - CSV with WKT geometry column
+
+**Examples:**
+```bash
+# Download file as GeoJSON (default)
+curl -O "http://localhost:8000/files/{file_id}/download"
+
+# Download file as Shapefile (ZIP)
+curl -O "http://localhost:8000/files/{file_id}/download?format=shapefile"
+
+# Download file as KML
+curl -O "http://localhost:8000/files/{file_id}/download?format=kml"
+
+# Example: Upload .shp, download as .geojson
+# 1. Upload shapefile
+curl -X POST "http://localhost:8000/files/upload" -F "file=@maharashtra_districts.shp.zip"
+# Response: {"id": "abc-123-def-456", ...}
+
+# 2. Download as GeoJSON
+curl -O "http://localhost:8000/files/abc-123-def-456/download?format=geojson"
+```
+
+### Batch Download Multiple Files
+
+**GET** `/files/download/batch`
+
+Download multiple files in batch with format conversion. Perfect for downloading all files from a state/district in one format.
+
+**Query Parameters:**
+- `state` (string, optional) - Filter files by state (e.g., "Maharashtra")
+- `district` (string, optional) - Filter files by district
+- `file_ids` (string, optional) - Comma-separated list of specific file IDs to download
+- `format` (string, default: "geojson") - Output format for all files
+- `merge` (boolean, default: true) - If true, merge all files into one. If false, return ZIP with separate files.
+
+**Examples:**
+```bash
+# Download all files from Maharashtra as GeoJSON (merged into one file)
+curl -O "http://localhost:8000/files/download/batch?state=Maharashtra&format=geojson&merge=true"
+
+# Download all .shp files from Maharashtra as .geojson (merged)
+curl -O "http://localhost:8000/files/download/batch?state=Maharashtra&format=geojson"
+
+# Download all files from Maharashtra as separate files in a ZIP
+curl -O "http://localhost:8000/files/download/batch?state=Maharashtra&format=geojson&merge=false"
+
+# Download specific files by ID
+curl -O "http://localhost:8000/files/download/batch?file_ids=id1,id2,id3&format=shapefile"
+
+# Download all files from a district as KML
+curl -O "http://localhost:8000/files/download/batch?state=Maharashtra&district=Pune&format=kml"
+```
+
+**Use Case Example:**
+```bash
+# Scenario: User uploaded 10 .shp files from Maharashtra
+# They want to download all of them as .geojson files
+
+# Option 1: Download as one merged GeoJSON file
+curl -O "http://localhost:8000/files/download/batch?state=Maharashtra&format=geojson&merge=true"
+# Returns: Maharashtra_merged.geojson (all 10 files combined)
+
+# Option 2: Download as separate files in a ZIP
+curl -O "http://localhost:8000/files/download/batch?state=Maharashtra&format=geojson&merge=false"
+# Returns: Maharashtra_10_files.zip containing 10 separate .geojson files
+```
+
+**Important Notes:**
+- ✅ **No Data Loss**: All geometry and properties are preserved during format conversion
+- ✅ **Flexible Formats**: Upload in any format, download in any format
+- ✅ **Batch Processing**: Download multiple files at once with filtering
+- ✅ **Merged or Separate**: Choose to merge files or keep them separate
+
 ## Interactive Documentation
 
 Visit `http://localhost:8000/docs` for interactive API documentation with Swagger UI, where you can test all endpoints directly.

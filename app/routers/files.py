@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, cast, String
 from typing import List, Optional
@@ -8,9 +9,11 @@ from app.db import get_db
 from app.models import GeoFile, Feature
 from app.schemas import GeoFileResponse, GeoFileSummary, FeatureResponse, geometry_to_geojson
 from app.services.file_parser import FileParser
+from app.services.file_converter import FileConverter
 from app.utils.geometry import geojson_to_wkb_element
 from app.utils.file_metadata import extract_state_district_from_filename, extract_state_district_from_properties
 from pathlib import Path
+from io import BytesIO
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -283,6 +286,198 @@ def get_file_features(
         )
         for feature in features
     ]
+
+
+@router.get("/{file_id}/download")
+def download_file(
+    file_id: UUID,
+    format: str = Query(default="geojson", description="Output format: geojson, shapefile, kml, kmz, gpx, csv"),
+    db: Session = Depends(get_db)
+):
+    """
+    Download a single file in the specified format.
+    
+    Supports format conversion: upload in any format (e.g., .shp), download in any format (e.g., .geojson).
+    All data is preserved during conversion.
+    
+    Supported output formats:
+    - geojson (default)
+    - shapefile (returns ZIP)
+    - kml
+    - kmz
+    - gpx
+    - csv
+    """
+    # Verify file exists
+    file = db.query(GeoFile).filter(GeoFile.id == file_id).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Get all features for this file
+    features = db.query(Feature).filter(Feature.file_id == file_id).all()
+    
+    if not features:
+        raise HTTPException(status_code=404, detail="No features found in file")
+    
+    try:
+        # Convert features to requested format
+        file_content, mime_type, extension = FileConverter.convert_features(
+            features=features,
+            output_format=format,
+            filename=file.filename
+        )
+        
+        # Create filename with appropriate extension
+        output_filename = f"{file.filename}{extension}"
+        
+        # Return as streaming response
+        return StreamingResponse(
+            BytesIO(file_content),
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{output_filename}"'
+            }
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"Download error: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error converting file: {str(e)}")
+
+
+@router.get("/download/batch")
+def download_batch_files(
+    state: Optional[str] = Query(None, description="Filter by state name"),
+    district: Optional[str] = Query(None, description="Filter by district name"),
+    file_ids: Optional[str] = Query(None, description="Comma-separated list of file IDs to download"),
+    format: str = Query(default="geojson", description="Output format: geojson, shapefile, kml, kmz, gpx, csv"),
+    merge: bool = Query(default=True, description="Merge all files into one file (True) or return ZIP with separate files (False)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Download multiple files in batch with format conversion.
+    
+    Example: Download all 10 .shp files from Maharashtra as .geojson files.
+    All data is preserved during conversion - no data loss.
+    
+    Query Parameters:
+    - state: Filter files by state (e.g., "Maharashtra")
+    - district: Filter files by district (optional)
+    - file_ids: Comma-separated list of specific file IDs to download (optional)
+    - format: Output format (geojson, shapefile, kml, kmz, gpx, csv)
+    - merge: If True, merge all files into one. If False, return ZIP with separate files.
+    
+    Returns:
+    - If merge=True: Single file in requested format with all features merged
+    - If merge=False: ZIP file containing separate files for each uploaded file
+    """
+    # Build query for files
+    query = db.query(GeoFile)
+    
+    # Filter by file IDs if provided
+    if file_ids:
+        try:
+            file_id_list = [UUID(id.strip()) for id in file_ids.split(',')]
+            query = query.filter(GeoFile.id.in_(file_id_list))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid file ID format. Use comma-separated UUIDs.")
+    
+    # Filter by state
+    if state:
+        query = query.filter(cast(GeoFile.state, String).ilike(f"%{state}%"))
+    
+    # Filter by district
+    if district:
+        query = query.filter(cast(GeoFile.district, String).ilike(f"%{district}%"))
+    
+    files = query.all()
+    
+    if not files:
+        raise HTTPException(status_code=404, detail="No files found matching the criteria")
+    
+    try:
+        if merge:
+            # Merge all files into one
+            file_features_list = []
+            for file in files:
+                features = db.query(Feature).filter(Feature.file_id == file.id).all()
+                if features:
+                    file_features_list.append((file.filename, features))
+            
+            if not file_features_list:
+                raise HTTPException(status_code=404, detail="No features found in any of the files")
+            
+            # Merge and convert
+            file_content, mime_type, extension = FileConverter.merge_multiple_files(
+                file_features_list=file_features_list,
+                output_format=format
+            )
+            
+            # Create merged filename
+            if state:
+                output_filename = f"{state.replace(' ', '_')}_merged{extension}"
+            elif len(files) == 1:
+                output_filename = f"{files[0].filename}{extension}"
+            else:
+                output_filename = f"merged_{len(files)}_files{extension}"
+            
+            return StreamingResponse(
+                BytesIO(file_content),
+                media_type=mime_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{output_filename}"'
+                }
+            )
+        
+        else:
+            # Return ZIP with separate files
+            import zipfile
+            from datetime import datetime
+            
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for file in files:
+                    features = db.query(Feature).filter(Feature.file_id == file.id).all()
+                    if not features:
+                        continue
+                    
+                    # Convert each file
+                    file_content, mime_type, extension = FileConverter.convert_features(
+                        features=features,
+                        output_format=format,
+                        filename=file.filename
+                    )
+                    
+                    # Add to ZIP
+                    zip_filename = f"{file.filename}{extension}"
+                    zip_file.writestr(zip_filename, file_content)
+            
+            zip_buffer.seek(0)
+            
+            # Create ZIP filename
+            if state:
+                zip_filename = f"{state.replace(' ', '_')}_{len(files)}_files.zip"
+            else:
+                zip_filename = f"batch_download_{len(files)}_files.zip"
+            
+            return StreamingResponse(
+                zip_buffer,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{zip_filename}"'
+                }
+            )
+    
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"Batch download error: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error processing batch download: {str(e)}")
 
 
 @router.delete("/{file_id}", status_code=204)
