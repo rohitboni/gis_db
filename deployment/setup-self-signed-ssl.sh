@@ -1,3 +1,31 @@
+#!/bin/bash
+
+# Script to create a self-signed SSL certificate for temporary HTTPS access
+# This is for testing only - browsers will show a security warning
+
+set -e
+
+DOMAIN="gis-portal.1acre.in"
+CERT_DIR="/opt/gis_db/deployment/ssl"
+NGINX_CONF="/opt/gis_db/deployment/nginx/conf.d/default.conf"
+
+echo "🔐 Setting up self-signed SSL certificate for $DOMAIN..."
+
+# Create SSL directory
+mkdir -p "$CERT_DIR"
+cd "$CERT_DIR"
+
+# Generate self-signed certificate
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout "$CERT_DIR/privkey.pem" \
+  -out "$CERT_DIR/fullchain.pem" \
+  -subj "/C=IN/ST=State/L=City/O=Organization/CN=$DOMAIN" \
+  -addext "subjectAltName=DNS:$DOMAIN,DNS:*.$DOMAIN"
+
+echo "✅ Self-signed certificate created"
+
+# Update nginx configuration to use self-signed certificate
+cat > "$NGINX_CONF" << 'NGINX_EOF'
 # Temporary self-signed SSL configuration
 # Browsers will show a security warning - this is expected for self-signed certificates
 
@@ -153,3 +181,19 @@ server {
         add_header Expires "0";
     }
 }
+NGINX_EOF
+
+echo "✅ Nginx configuration updated"
+
+# Update docker-compose to mount SSL directory
+echo ""
+echo "⚠️  IMPORTANT: You need to update docker-compose.yml to mount the SSL directory"
+echo "   Add this volume mount to the nginx service:"
+echo "   - ./ssl:/etc/nginx/ssl:ro"
+echo ""
+echo "📋 Next steps:"
+echo "   1. Update docker-compose.yml to mount ./ssl:/etc/nginx/ssl:ro"
+echo "   2. Run: docker-compose restart nginx"
+echo "   3. Access: https://gis-portal.1acre.in/docs"
+echo "   4. Accept the security warning in your browser (it's a self-signed cert)"
+

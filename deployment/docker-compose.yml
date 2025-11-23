@@ -27,6 +27,7 @@ services:
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./ssl:/etc/nginx/ssl:ro
     depends_on:
       - web
     restart: unless-stopped
