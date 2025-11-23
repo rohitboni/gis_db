@@ -1,23 +1,10 @@
 # Docker Compose configuration for GIS DB API application
 # This setup includes nginx in Docker that will use existing SSL certificates
 # Host nginx will be stopped to avoid port conflicts
+# Database: AWS RDS PostgreSQL (external)
 version: '3.8'
 
 services:
-  db:
-    image: postgis/postgis:15-3.3
-    environment:
-      POSTGRES_DB: gis_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_INITDB_ARGS: "--auth-host=md5"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql
-    ports:
-      - "127.0.0.1:5432:5432"  # Bind to localhost only for security
-    restart: unless-stopped
-
   web:
     build:
       context: ..
@@ -25,13 +12,11 @@ services:
     expose:
       - "8000"  # Only expose, don't bind to host ports (nginx will proxy)
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/gis_db
+      - DATABASE_URL=postgresql://gis-staging-db:gis-staging-db123@gis-staging-db.cjso82amml7c.ap-south-1.rds.amazonaws.com:5432/gis_db
       - DEBUG=False
-    depends_on:
-      - db
     volumes:
       - ..:/app
-    command: sh -c "sleep 15 && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "sleep 5 && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
     restart: unless-stopped
 
   nginx:
@@ -45,7 +30,3 @@ services:
     depends_on:
       - web
     restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
