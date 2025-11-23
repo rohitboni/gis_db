@@ -374,38 +374,48 @@
       register: cert_expiry
       ignore_errors: yes
 
+    - name: Calculate days until certificate expiry
+      shell: |
+        if [ -f "/etc/letsencrypt/live/{{ domain }}/fullchain.pem" ]; then
+          EXPIRY_DATE=$(openssl x509 -enddate -noout -in /etc/letsencrypt/live/{{ domain }}/fullchain.pem | cut -d= -f2)
+          EXPIRY_EPOCH=$(date -d "$EXPIRY_DATE" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$EXPIRY_DATE" +%s 2>/dev/null || echo "0")
+          CURRENT_EPOCH=$(date +%s)
+          if [ "$EXPIRY_EPOCH" != "0" ] && [ "$EXPIRY_EPOCH" -gt "$CURRENT_EPOCH" ]; then
+            DAYS_LEFT=$(( ($EXPIRY_EPOCH - $CURRENT_EPOCH) / 86400 ))
+            echo $DAYS_LEFT
+          else
+            echo "0"
+          fi
+        else
+          echo "0"
+        fi
+      register: days_until_expiry
+      ignore_errors: yes
+
+    - name: Determine if certificate needs renewal
+      set_fact:
+        cert_needs_renewal: "{{ (not ssl_cert.stat.exists) or (days_until_expiry.stdout | int) <= 7 }}"
+
     - name: Display SSL certificate status
       debug:
         msg: |
           SSL Certificate Status:
           - Exists: {{ ssl_cert.stat.exists }}
           - Expiry: {{ cert_expiry.stdout if cert_expiry.stdout is defined else 'N/A' }}
+          - Days until expiry: {{ days_until_expiry.stdout if days_until_expiry.stdout is defined else 'N/A' }}
+          - Needs renewal: {{ cert_needs_renewal }}
 
-    - name: Clean up certbot state to avoid order errors
+    - name: Clean up stale certbot orders (only if renewing)
       shell: |
-        # Clean up any stale certbot orders
+        # Clean up any stale certbot orders to avoid errors
         rm -rf /var/lib/letsencrypt/orders/* || true
-        rm -rf /var/lib/letsencrypt/renewal/* || true
-        # Also clean up domain-specific directories
-        rm -rf "/etc/letsencrypt/live/{{ domain }}" || true
-        rm -rf "/etc/letsencrypt/archive/{{ domain }}" || true
-        rm -rf "/etc/letsencrypt/renewal/{{ domain }}.conf" || true
+      when: cert_needs_renewal
       ignore_errors: yes
 
-    - name: Remove old certificate to force new certificate generation
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "/etc/letsencrypt/live/{{ domain }}"
-        - "/etc/letsencrypt/archive/{{ domain }}"
-        - "/etc/letsencrypt/renewal/{{ domain }}.conf"
-      ignore_errors: yes
-
-    - name: Create new SSL certificate using standalone mode
+    - name: Create or renew SSL certificate using standalone mode
       shell: |
         # Use standalone mode since nginx is not running
-        # Always create a fresh certificate on every deployment
+        # Only create/renew if certificate doesn't exist or expires within 7 days
         certbot certonly \
           --standalone \
           --non-interactive \
@@ -413,8 +423,8 @@
           --email admin@1acre.in \
           --preferred-challenges http \
           -d "{{ domain }}" \
-          --expand \
-          --force-renewal
+          --expand
+      when: cert_needs_renewal
       register: certbot_result
       ignore_errors: yes
 
@@ -428,24 +438,28 @@
           --agree-tos \
           --email admin@1acre.in \
           --preferred-challenges http \
-          -d "{{ domain }}" \
-          --force-renewal
-      when: certbot_result.rc != 0
+          -d "{{ domain }}"
+      when: cert_needs_renewal and certbot_result.rc != 0
       ignore_errors: yes
 
-    - name: Verify SSL certificate was created/renewed
+    - name: Verify SSL certificate exists (check again after potential renewal)
       stat:
         path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
       register: ssl_cert_after
 
-    - name: Display SSL certificate creation result
+    - name: Display SSL certificate result
       debug:
         msg: |
           {% if ssl_cert_after.stat.exists %}
-          ✅ SSL certificate successfully created/renewed for {{ domain }}
+          ✅ SSL certificate is available for {{ domain }}
           Certificate path: /etc/letsencrypt/live/{{ domain }}/fullchain.pem
+          {% if cert_needs_renewal %}
+          ✅ Certificate was renewed (expires within 7 days or didn't exist)
           {% else %}
-          ⚠️ SSL certificate creation may have failed. Please check manually.
+          ℹ️ Certificate is valid and doesn't need renewal yet
+          {% endif %}
+          {% else %}
+          ⚠️ SSL certificate not found. Using HTTP-only configuration.
           {% endif %}
 
     - name: Set up automatic SSL renewal cron job
