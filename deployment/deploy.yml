@@ -378,7 +378,7 @@
       shell: |
         if [ -f "/etc/letsencrypt/live/{{ domain }}/fullchain.pem" ]; then
           EXPIRY_DATE=$(openssl x509 -enddate -noout -in /etc/letsencrypt/live/{{ domain }}/fullchain.pem | cut -d= -f2)
-          EXPIRY_EPOCH=$(date -d "$EXPIRY_DATE" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$EXPIRY_DATE" +%s 2>/dev/null || echo "0")
+          EXPIRY_EPOCH=$(date -d "$EXPIRY_DATE" +%s 2>/dev/null || echo "0")
           CURRENT_EPOCH=$(date +%s)
           if [ "$EXPIRY_EPOCH" != "0" ] && [ "$EXPIRY_EPOCH" -gt "$CURRENT_EPOCH" ]; then
             DAYS_LEFT=$(( ($EXPIRY_EPOCH - $CURRENT_EPOCH) / 86400 ))
@@ -414,31 +414,15 @@
 
     - name: Create or renew SSL certificate using standalone mode
       shell: |
-        # Use standalone mode since nginx is not running
-        # Only create/renew if certificate doesn't exist or expires within 7 days
-        certbot certonly \
-          --standalone \
-          --non-interactive \
-          --agree-tos \
-          --email admin@1acre.in \
-          --preferred-challenges http \
-          -d "{{ domain }}" \
-          --expand
+        certbot certonly --standalone --non-interactive --agree-tos --email admin@1acre.in --preferred-challenges http -d "{{ domain }}" --expand
       when: cert_needs_renewal
       register: certbot_result
       ignore_errors: yes
 
     - name: Retry certificate creation if first attempt failed
       shell: |
-        # Wait a bit before retry
         sleep 5
-        certbot certonly \
-          --standalone \
-          --non-interactive \
-          --agree-tos \
-          --email admin@1acre.in \
-          --preferred-challenges http \
-          -d "{{ domain }}"
+        certbot certonly --standalone --non-interactive --agree-tos --email admin@1acre.in --preferred-challenges http -d "{{ domain }}"
       when: cert_needs_renewal and certbot_result.rc != 0
       ignore_errors: yes
 
