@@ -12,7 +12,7 @@ services:
     expose:
       - "8000"  # Only expose, don't bind to host ports (nginx will proxy)
     environment:
-      - DATABASE_URL=postgresql://gis-staging-db:gis-staging-db123@gis-staging-db.cjso82amml7c.ap-south-1.rds.amazonaws.com:5432/gis_db
+      - DATABASE_URL=postgresql://gis-staging-db:gis-staging-db123@gis-staging-db.cjso82amml7c.ap-south-1.rds.amazonaws.com:5432/gis_db?sslmode=require
       - DEBUG=False
     volumes:
       - ..:/app

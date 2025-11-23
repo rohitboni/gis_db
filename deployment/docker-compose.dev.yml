@@ -10,7 +10,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://gis-staging-db:gis-staging-db123@gis-staging-db.cjso82amml7c.ap-south-1.rds.amazonaws.com:5432/gis_db
+      - DATABASE_URL=postgresql://gis-staging-db:gis-staging-db123@gis-staging-db.cjso82amml7c.ap-south-1.rds.amazonaws.com:5432/gis_db?sslmode=require
       - DEBUG=True
     volumes:
       - ..:/app

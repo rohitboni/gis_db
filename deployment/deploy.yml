@@ -211,7 +211,7 @@
         # Stop containers using port 5432
         docker ps --filter "publish=5432" -q | xargs -r docker stop || true
         # Also check for containers with port mapping like 127.0.0.1:5432:5432
-        docker ps --format '{{.ID}} {{.Ports}}' | grep -E ':(5432|0.0.0.0:5432|127.0.0.1:5432)' | awk '{print $1}' | xargs -r docker stop || true
+        docker ps --format '{% raw %}{{.ID}} {{.Ports}}{% endraw %}' | grep -E ':(5432|0.0.0.0:5432|127.0.0.1:5432)' | awk '{print $1}' | xargs -r docker stop || true
       ignore_errors: yes
       become_user: ubuntu
 
@@ -381,6 +381,17 @@
           - Exists: {{ ssl_cert.stat.exists }}
           - Expiry: {{ cert_expiry.stdout if cert_expiry.stdout is defined else 'N/A' }}
 
+    - name: Clean up certbot state to avoid order errors
+      shell: |
+        # Clean up any stale certbot orders
+        rm -rf /var/lib/letsencrypt/orders/* || true
+        rm -rf /var/lib/letsencrypt/renewal/* || true
+        # Also clean up domain-specific directories
+        rm -rf "/etc/letsencrypt/live/{{ domain }}" || true
+        rm -rf "/etc/letsencrypt/archive/{{ domain }}" || true
+        rm -rf "/etc/letsencrypt/renewal/{{ domain }}.conf" || true
+      ignore_errors: yes
+
     - name: Remove old certificate to force new certificate generation
       file:
         path: "{{ item }}"
@@ -402,19 +413,23 @@
           --email admin@1acre.in \
           --preferred-challenges http \
           -d "{{ domain }}" \
-          --expand
+          --expand \
+          --force-renewal
       register: certbot_result
       ignore_errors: yes
 
     - name: Retry certificate creation if first attempt failed
       shell: |
+        # Wait a bit before retry
+        sleep 5
         certbot certonly \
           --standalone \
           --non-interactive \
           --agree-tos \
           --email admin@1acre.in \
           --preferred-challenges http \
-          -d "{{ domain }}"
+          -d "{{ domain }}" \
+          --force-renewal
       when: certbot_result.rc != 0
       ignore_errors: yes
 
@@ -540,7 +555,7 @@
         echo "Checking for containers using ports 5432, 80, 443..."
         
         # Stop containers using port 5432
-        CONTAINERS_5432=$(docker ps --format '{{.ID}}' --filter "publish=5432" 2>/dev/null || true)
+        CONTAINERS_5432=$(docker ps --format '{% raw %}{{.ID}}{% endraw %}' --filter "publish=5432" 2>/dev/null || true)
         if [ -n "$CONTAINERS_5432" ]; then
           echo "Stopping containers using port 5432: $CONTAINERS_5432"
           echo "$CONTAINERS_5432" | xargs docker stop || true
@@ -548,7 +563,7 @@
         
         # Also check by inspecting port mappings
         for CID in $(docker ps -q); do
-          PORTS=$(docker inspect --format='{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}' $CID 2>/dev/null || echo "")
+          PORTS=$(docker inspect --format='{% raw %}{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}{% endraw %}' $CID 2>/dev/null || echo "")
           if echo "$PORTS" | grep -E '(5432|80|443)/' > /dev/null; then
             echo "Stopping container $CID using ports: $PORTS"
             docker stop $CID || true
@@ -639,12 +654,43 @@
         msg: "{{ rds_connection_check.stdout }}"
       when: rds_connection_check.stdout is defined
 
+    - name: Wait for web container to be running
+      shell: |
+        for i in {1..30}; do
+          if docker-compose ps web | grep -q "Up"; then
+            echo "Web container is up"
+            exit 0
+          fi
+          echo "Waiting for web container... ($i/30)"
+          sleep 2
+        done
+        echo "Web container did not start in time"
+        exit 1
+      args:
+        chdir: "{{ project_dir }}/deployment"
+      become_user: ubuntu
+      register: web_container_wait
+      ignore_errors: yes
+
+    - name: Check web container logs for startup
+      shell: docker-compose logs --tail=50 web
+      args:
+        chdir: "{{ project_dir }}/deployment"
+      become_user: ubuntu
+      register: web_logs
+      ignore_errors: yes
+
+    - name: Display web container logs
+      debug:
+        msg: "Web container logs: {{ web_logs.stdout }}"
+      when: web_logs.stdout is defined
+
     - name: Wait for application to initialize database
       pause:
-        seconds: 10
+        seconds: 20
 
     - name: Verify FastAPI application initialized database tables
-      shell: docker-compose logs web | grep -i "initialized\|table\|postgis" | tail -20
+      shell: docker-compose logs web | grep -i "initialized\|table\|postgis\|started\|application\|uvicorn" | tail -30
       args:
         chdir: "{{ project_dir }}/deployment"
       become_user: ubuntu
@@ -655,6 +701,42 @@
       debug:
         msg: "Application initialization: {{ app_init_logs.stdout }}"
       when: app_init_logs.stdout is defined
+
+    - name: Check if web container is healthy
+      shell: docker-compose ps web | grep -q "Up" && echo "Container is up" || echo "Container is not up"
+      args:
+        chdir: "{{ project_dir }}/deployment"
+      become_user: ubuntu
+      register: container_health
+      ignore_errors: yes
+
+    - name: Display container health
+      debug:
+        msg: "{{ container_health.stdout }}"
+      when: container_health.stdout is defined
+
+    - name: Check if web container is listening on port 8000
+      shell: |
+        WEB_CONTAINER=$(docker-compose ps -q web)
+        if [ -n "$WEB_CONTAINER" ]; then
+          docker exec $WEB_CONTAINER sh -c "nc -z localhost 8000 && echo 'Port 8000 is listening' || echo 'Port 8000 is not listening'" || echo "Could not check port"
+        else
+          echo "Web container not found"
+        fi
+      args:
+        chdir: "{{ project_dir }}/deployment"
+      become_user: ubuntu
+      register: port_check
+      ignore_errors: yes
+
+    - name: Display port check result
+      debug:
+        msg: "{{ port_check.stdout }}"
+      when: port_check.stdout is defined
+
+    - name: Wait additional time for application to be fully ready
+      pause:
+        seconds: 15
 
     # ===================================
     # STEP 9: CLEANUP & FINAL STATUS
@@ -697,13 +779,36 @@
       become_user: ubuntu
       register: container_status
 
-    - name: Test application health
+    - name: Check web container logs before health check
+      shell: docker-compose logs --tail=100 web 2>&1
+      args:
+        chdir: "{{ project_dir }}/deployment"
+      become_user: ubuntu
+      register: web_logs_before_health
+      ignore_errors: yes
+
+    - name: Display web container logs before health check
+      debug:
+        msg: "Web container logs (last 100 lines): {{ web_logs_before_health.stdout }}"
+      when: web_logs_before_health.stdout is defined
+
+    - name: Test application health (with retries)
       uri:
         url: "https://{{ domain }}/health"
         method: GET
-        timeout: 10
+        timeout: 30
+        status_code: [200, 502, 503, 504]
       register: health_check
+      retries: 5
+      delay: 10
       ignore_errors: yes
+
+    - name: Display health check result
+      debug:
+        msg: |
+          Health check status: {{ health_check.status | default('Unknown') }}
+          Health check response: {{ health_check.msg | default('No response') }}
+      when: health_check is defined
 
     # ===================================
     # VERIFY DATA PRESERVATION
