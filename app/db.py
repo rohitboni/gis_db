@@ -77,14 +77,14 @@ def init_db():
     # Enable PostGIS extension FIRST (before creating tables)
     # Use begin() for proper transaction handling
     try:
-        with engine.begin() as conn:
-            try:
-                conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
+    with engine.begin() as conn:
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
                 print("✓ PostGIS extension enabled successfully")
-            except Exception as e:
-                # If extension already exists, that's fine - continue
+        except Exception as e:
+            # If extension already exists, that's fine - continue
                 print(f"ℹ PostGIS extension check: {e}")
-                # Extension might already exist, so we continue
+            # Extension might already exist, so we continue
     except Exception as e:
         print(f"⚠ Error during PostGIS extension setup: {e}")
         # Continue anyway - extension might already exist
@@ -94,7 +94,7 @@ def init_db():
     
     # Create tables AFTER PostGIS extension is enabled
     try:
-        Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
         print("✓ Database tables initialized successfully")
     except Exception as e:
         print(f"⚠ Error creating tables: {e}")

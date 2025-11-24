@@ -18,6 +18,156 @@ from io import BytesIO
 router = APIRouter(prefix="/files", tags=["files"])
 
 
+@router.post("/upload-multiple", response_model=List[GeoFileResponse], status_code=201)
+async def upload_multiple_files(
+    files: List[UploadFile] = File(...),
+    state: Optional[str] = Form(None),
+    district: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload multiple geographic files and create file records with all their features.
+    
+    Supported formats: GeoJSON, JSON, KML, KMZ, Shapefile (ZIP), GPX, CSV
+    
+    State is required and can be provided as a form field or will be extracted from files.
+    All files will use the same state/district if provided, otherwise extracted individually.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+    
+    results = []
+    errors = []
+    
+    for idx, file in enumerate(files):
+        try:
+            # Process each file using the same logic as single upload
+            file_content = await file.read()
+            file_size = len(file_content)
+            
+            if not file_content:
+                errors.append({"file": file.filename, "error": "Empty file"})
+                continue
+            
+            # Detect file type
+            file_type = FileParser.detect_file_type(file.filename)
+            if file_type == 'unknown':
+                errors.append({"file": file.filename, "error": f"Unsupported file type: {Path(file.filename).suffix}"})
+                continue
+            
+            # Parse file to get features
+            parsed_features = FileParser.parse_file(file_content, file.filename)
+            
+            if not parsed_features:
+                errors.append({"file": file.filename, "error": "No features found in file"})
+                continue
+            
+            # Use provided state/district, or extract from filename/properties
+            file_state = state
+            file_district = district
+            
+            if not file_state:
+                filename_metadata = extract_state_district_from_filename(file.filename)
+                properties_metadata = extract_state_district_from_properties(parsed_features)
+                file_state = properties_metadata.get('state') or filename_metadata.get('state')
+            
+            if not file_district:
+                filename_metadata = extract_state_district_from_filename(file.filename)
+                properties_metadata = extract_state_district_from_properties(parsed_features)
+                file_district = properties_metadata.get('district') or filename_metadata.get('district')
+            
+            # State is required
+            if not file_state:
+                errors.append({"file": file.filename, "error": "State is required. Please provide state name or ensure file contains state information."})
+                continue
+            
+            # Create file record
+            db_file = GeoFile(
+                filename=Path(file.filename).stem,
+                original_filename=file.filename,
+                file_type=file_type,
+                state=file_state,
+                district=file_district,
+                total_features=len(parsed_features),
+                file_size=file_size
+            )
+            db.add(db_file)
+            db.flush()  # Flush to get the file ID
+            
+            # Create feature records
+            db_features = []
+            for parsed_feature in parsed_features:
+                try:
+                    geometry_wkb = geojson_to_wkb_element(parsed_feature['geometry'])
+                    
+                    db_feature = Feature(
+                        file_id=db_file.id,
+                        name=parsed_feature['name'],
+                        properties=parsed_feature.get('properties', {}),
+                        geometry=geometry_wkb
+                    )
+                    
+                    db.add(db_feature)
+                    db_features.append(db_feature)
+                    
+                except Exception as e:
+                    print(f"Error processing feature {parsed_feature.get('name')} in file {file.filename}: {str(e)}")
+                    continue
+            
+            if not db_features:
+                db.rollback()
+                errors.append({"file": file.filename, "error": "Failed to process any features from file"})
+                continue
+            
+            # Update total_features count with actual saved features
+            db_file.total_features = len(db_features)
+            
+            db.commit()
+            db.refresh(db_file)
+            
+            results.append(GeoFileResponse(
+                id=db_file.id,
+                filename=db_file.filename,
+                original_filename=db_file.original_filename,
+                file_type=db_file.file_type,
+                state=db_file.state,
+                district=db_file.district,
+                total_features=db_file.total_features,
+                file_size=db_file.file_size,
+                created_at=db_file.created_at,
+                updated_at=db_file.updated_at
+            ))
+            
+        except ValueError as e:
+            db.rollback()
+            errors.append({"file": file.filename, "error": str(e)})
+        except HTTPException as e:
+            db.rollback()
+            errors.append({"file": file.filename, "error": e.detail})
+        except Exception as e:
+            db.rollback()
+            import traceback
+            error_detail = str(e)
+            print(f"Upload error for file {file.filename}: {error_detail}")
+            print(traceback.format_exc())
+            errors.append({"file": file.filename, "error": f"Error processing file: {error_detail}"})
+    
+    # If some files succeeded, return results with errors in response
+    if results:
+        # Store errors in response headers or return them in a structured way
+        # For now, we'll return results and log errors
+        if errors:
+            print(f"Some files failed to upload: {errors}")
+        return results
+    else:
+        # All files failed
+        error_messages = [f"{err['file']}: {err['error']}" for err in errors]
+        raise HTTPException(
+            status_code=400,
+            detail=f"All files failed to upload. Errors: {'; '.join(error_messages)}"
+        )
+
+
 @router.post("/upload", response_model=GeoFileResponse, status_code=201)
 async def upload_file(
     file: UploadFile = File(...),
